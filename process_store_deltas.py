@@ -20,6 +20,39 @@ arcpy.env.qualifiedFieldNames = False;
 arcpy.env.overwriteOutput = True;
 arcpy.env.scratchWorkspace = os.path.join(os.path.dirname(__file__), 'scratch.gdb')
 
+def projectGeocodeResult(workspace,inputFeatureClass,outputFeatureClass, outCoordinateSystemString):
+    try:
+        # Use ListFeatureClasses to generate a list of inputs
+        for inputFeatureClass in arcpy.ListFeatureClasses():
+
+            # Determine if the input has a defined coordinate system, can't project it if it does not
+            description = arcpy.Describe(inputFeatureClass)
+
+            if description.spatialReference.Name == "Unknown":
+                _log.info('Skipped this feature class due to undefined coordinate system: ' + inputFeatureClass)
+
+            else:
+                # Determine the new output feature class path and name
+                outputFeatureClass = os.path.join(workspace, inputFeatureClass)
+
+                # Set output coordinate system
+                outCS = arcpy.SpatialReference(outCoordinateSystemString)
+
+                # run project tool
+                arcpy.Project_management(inputFeatureClass, outputFeatureClass, outCS)
+
+                # check messages
+                _log.info(arcpy.GetMessages())
+
+
+    except arcpy.ExecuteError:
+        print(arcpy.GetMessages(2))
+
+    except Exception as ex:
+        print(ex.args[0])
+
+    return ""
+
 def process_store_facts(args):
     logging.basicConfig(level=logging.DEBUG)
     _log.info('Process stores and facts started')
@@ -33,6 +66,7 @@ def process_store_facts(args):
 
     #Set-up outputs
     geocode_result = arcpy.env.scratchWorkspace + '/geocode_result'
+    geocode_projected = arcpy.env.scratchWorkspace + '/stores_projected'
     deltas_view_new = 'deltas_new'
     deltas_table_new = arcpy.env.scratchWorkspace + '/select_new_result'
     deltas_view_removed = 'deltas_removed'
@@ -66,7 +100,7 @@ def process_store_facts(args):
             if store_field.name != 'sub_channel' and store_field.name != 'store_status' and store_field.name != 'OBJECTID':
                 store_field_names.append(store_field.name)
         store_fields_string = '; '.join(store_field_names)
-	
+
         #Set-up where clauses
         geocodes_where_matched = ''' "Status" = 'M' OR "Status" = 'T' '''
         deltas_where_remove = "type = 'Removed'"
@@ -122,6 +156,9 @@ def process_store_facts(args):
 
             _log.info('Finished deleting store deltas from master store feature class')
             _log.info('Master store feature class now contains ' + str(arcpy.GetCount_management(store_fc)))
+
+        #Project the geocodes results
+        projectGeocodeResult(arcpy.env.scratchWorkspace,store_fc,geocode_projected, "WGS 1984 Web Mercator Auxiliary Sphere")
     except arcpy.ExecuteError as e:
         log_msg = 'Could not insert or remove all store deltas from master store feature class - rolling back changes'
         _log.error(log_msg)
@@ -138,7 +175,7 @@ def send_alert_email(exception):
     #Send message
     s = smtplib.SMTP('smtp.lan.us.redbull.com:25')
     for recipient in name_email:
-        #Create message container - the correct MIME type is multipart/alternative.    
+        #Create message container - the correct MIME type is multipart/alternative.
         msg = MIMEMultipart('related')
         msg['Subject'] = 'Alert: Error processing store facts'
         msg['From'] = 'redbullgis@us.redbull.com'
